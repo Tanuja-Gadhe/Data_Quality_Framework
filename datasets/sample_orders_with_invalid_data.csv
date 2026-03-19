@@ -1,0 +1,11 @@
+order_id,customer_id,product_name,quantity,price,order_date,status,region
+ORD041,CUST1041,Gaming Mouse,2,59.99,2024-01-29,completed,US-EAST
+,CUST1042,RGB Keyboard,1,129.99,2024-01-29,completed,US-WEST
+ORD043,,Gaming Headset,1,179.99,2024-01-29,pending,EU-WEST
+ORD044,CUST1044,Gaming Chair,1,-499.99,2024-01-30,completed,US-EAST
+ORD045,CUST1045,Desk Mat,0,39.99,2024-01-30,shipped,ASIA-PACIFIC
+ORD046,CUST1046,Monitor Light Bar,1,89.99,invalid-date,completed,US-WEST
+ORD047,CUST1047,Cable Clips,20,5.99,2024-01-31,completed,EU-WEST
+ORD041,CUST1048,Duplicate Order,1,25.99,2024-01-31,completed,US-EAST
+ORD049,CUST1049,Laptop Riser,1,45.99,2024-02-01,completed,ASIA-PACIFIC
+ORD050,CUST1050,Desk Organizer,2,29.99,2024-02-01,completed,US-WEST

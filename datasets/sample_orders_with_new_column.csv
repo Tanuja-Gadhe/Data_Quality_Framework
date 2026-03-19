@@ -1,0 +1,11 @@
+order_id,customer_id,product_name,quantity,price,order_date,status,region,shipping_method
+ORD031,CUST1031,Smart Watch,1,249.99,2024-01-25,completed,US-EAST,express
+ORD032,CUST1032,Fitness Tracker,2,89.99,2024-01-25,completed,US-WEST,standard
+ORD033,CUST1033,Phone Charger,3,19.99,2024-01-25,shipped,EU-WEST,standard
+ORD034,CUST1034,Laptop Sleeve,1,34.99,2024-01-26,pending,US-EAST,express
+ORD035,CUST1035,Wireless Earbuds,1,149.99,2024-01-26,completed,ASIA-PACIFIC,standard
+ORD036,CUST1036,Portable Monitor,1,299.99,2024-01-26,completed,US-WEST,express
+ORD037,CUST1037,USB Flash Drive,5,12.99,2024-01-27,completed,EU-WEST,standard
+ORD038,CUST1038,Memory Card 128GB,2,29.99,2024-01-27,shipped,US-EAST,standard
+ORD039,CUST1039,Card Reader,1,15.99,2024-01-27,completed,ASIA-PACIFIC,express
+ORD040,CUST1040,Laptop Battery,1,79.99,2024-01-28,completed,US-WEST,express

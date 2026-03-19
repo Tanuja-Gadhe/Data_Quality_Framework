@@ -1,0 +1,372 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS Data Lake Schema Evolution and Data Quality Framework Infrastructure'
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: data-lake-schema-evolution
+    Description: Name of the project
+  
+  DataLakeBucketName:
+    Type: String
+    Description: Name of the S3 bucket for data lake (must be globally unique)
+  
+  GlueDatabaseName:
+    Type: String
+    Default: data_lake_db
+    Description: Name of the Glue database
+  
+  NotificationEmail:
+    Type: String
+    Description: Email address for data quality alerts
+    AllowedPattern: '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+
+Resources:
+  # ==========================================
+  # S3 Data Lake Bucket
+  # ==========================================
+  DataLakeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref DataLakeBucketName
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: TransitionOldQuarantineData
+            Status: Enabled
+            Prefix: quarantine/
+            Transitions:
+              - TransitionInDays: 90
+                StorageClass: GLACIER
+            ExpirationInDays: 365
+          - Id: TransitionOldLogs
+            Status: Enabled
+            Prefix: logs/
+            Transitions:
+              - TransitionInDays: 30
+                StorageClass: STANDARD_IA
+            ExpirationInDays: 180
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: Production
+
+  # ==========================================
+  # SNS Topic for Alerts
+  # ==========================================
+  DataQualityAlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${ProjectName}-data-quality-alerts'
+      DisplayName: Data Quality Alerts
+      Subscription:
+        - Endpoint: !Ref NotificationEmail
+          Protocol: email
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ==========================================
+  # IAM Role for Glue Job
+  # ==========================================
+  GlueJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-glue-job-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: DataLakeAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt DataLakeBucket.Arn
+                  - !Sub '${DataLakeBucket.Arn}/*'
+              - Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetTable
+                  - glue:GetTables
+                  - glue:CreateTable
+                  - glue:UpdateTable
+                  - glue:DeleteTable
+                  - glue:GetPartition
+                  - glue:GetPartitions
+                  - glue:CreatePartition
+                  - glue:UpdatePartition
+                  - glue:DeletePartition
+                  - glue:BatchCreatePartition
+                  - glue:BatchDeletePartition
+                Resource:
+                  - !Sub 'arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog'
+                  - !Sub 'arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/${GlueDatabaseName}'
+                  - !Sub 'arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/${GlueDatabaseName}/*'
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref DataQualityAlertsTopic
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws-glue/*'
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                Resource: '*'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ==========================================
+  # IAM Role for Lambda Function
+  # ==========================================
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: LambdaTriggerPermissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt DataLakeBucket.Arn
+                  - !Sub '${DataLakeBucket.Arn}/raw/*'
+              - Effect: Allow
+                Action:
+                  - glue:StartJobRun
+                  - glue:GetJobRun
+                  - glue:GetJobRuns
+                Resource:
+                  - !Sub 'arn:aws:glue:${AWS::Region}:${AWS::AccountId}:job/*'
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                Resource: '*'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ==========================================
+  # Glue Database
+  # ==========================================
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Ref GlueDatabaseName
+        Description: Data Lake database for schema evolution framework
+
+  # ==========================================
+  # Glue Job
+  # ==========================================
+  OrdersETLJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub '${ProjectName}-orders-etl-job'
+      Description: ETL job for orders data with schema evolution and data quality validation
+      Role: !GetAtt GlueJobRole.Arn
+      Command:
+        Name: glueetl
+        ScriptLocation: !Sub 's3://${DataLakeBucket}/scripts/orders_etl_job.py'
+        PythonVersion: '3'
+      DefaultArguments:
+        '--job-language': 'python'
+        '--enable-metrics': 'true'
+        '--enable-continuous-cloudwatch-log': 'true'
+        '--enable-spark-ui': 'true'
+        '--spark-event-logs-path': !Sub 's3://${DataLakeBucket}/logs/spark-logs/'
+        '--TempDir': !Sub 's3://${DataLakeBucket}/temp/'
+        '--extra-py-files': !Sub 's3://${DataLakeBucket}/scripts/dependencies.zip'
+        '--GLUE_DATABASE': !Ref GlueDatabaseName
+        '--DATA_LAKE_BUCKET': !Ref DataLakeBucketName
+        '--SNS_TOPIC_ARN': !Ref DataQualityAlertsTopic
+      GlueVersion: '4.0'
+      MaxRetries: 1
+      Timeout: 60
+      NumberOfWorkers: 10
+      WorkerType: G.1X
+      Tags:
+        Project: !Ref ProjectName
+
+  # ==========================================
+  # Lambda Function
+  # ==========================================
+  TriggerPipelineLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-trigger-pipeline'
+      Description: Triggers Glue ETL job when new files arrive in S3
+      Runtime: python3.11
+      Handler: trigger_pipeline.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          # Placeholder - deploy actual code separately
+          def lambda_handler(event, context):
+              return {'statusCode': 200, 'body': 'Function deployed'}
+      Environment:
+        Variables:
+          GLUE_JOB_NAME: !Ref OrdersETLJob
+          GLUE_DATABASE: !Ref GlueDatabaseName
+          RAW_DATA_PREFIX: 'raw/orders/'
+          ENABLE_NOTIFICATIONS: 'true'
+      Timeout: 300
+      MemorySize: 256
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ==========================================
+  # Lambda Permission for S3
+  # ==========================================
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref TriggerPipelineLambda
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+      SourceArn: !GetAtt DataLakeBucket.Arn
+
+  # ==========================================
+  # CloudWatch Log Groups
+  # ==========================================
+  GlueJobLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws-glue/jobs/${ProjectName}-orders-etl-job'
+      RetentionInDays: 30
+
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${ProjectName}-trigger-pipeline'
+      RetentionInDays: 14
+
+  DataQualityLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/glue/data-lake-pipeline
+      RetentionInDays: 90
+
+  # ==========================================
+  # CloudWatch Alarms
+  # ==========================================
+  GlueJobFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-glue-job-failures'
+      AlarmDescription: Alert when Glue job fails
+      MetricName: glue.driver.aggregate.numFailedTasks
+      Namespace: Glue
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref DataQualityAlertsTopic
+
+  LambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-lambda-errors'
+      AlarmDescription: Alert when Lambda function errors occur
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref TriggerPipelineLambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref DataQualityAlertsTopic
+
+Outputs:
+  DataLakeBucketName:
+    Description: Name of the S3 data lake bucket
+    Value: !Ref DataLakeBucket
+    Export:
+      Name: !Sub '${ProjectName}-bucket-name'
+
+  DataLakeBucketArn:
+    Description: ARN of the S3 data lake bucket
+    Value: !GetAtt DataLakeBucket.Arn
+    Export:
+      Name: !Sub '${ProjectName}-bucket-arn'
+
+  GlueDatabaseName:
+    Description: Name of the Glue database
+    Value: !Ref GlueDatabase
+    Export:
+      Name: !Sub '${ProjectName}-database-name'
+
+  GlueJobName:
+    Description: Name of the Glue ETL job
+    Value: !Ref OrdersETLJob
+    Export:
+      Name: !Sub '${ProjectName}-glue-job-name'
+
+  LambdaFunctionArn:
+    Description: ARN of the Lambda trigger function
+    Value: !GetAtt TriggerPipelineLambda.Arn
+    Export:
+      Name: !Sub '${ProjectName}-lambda-arn'
+
+  SNSTopicArn:
+    Description: ARN of the SNS topic for alerts
+    Value: !Ref DataQualityAlertsTopic
+    Export:
+      Name: !Sub '${ProjectName}-sns-topic-arn'
+
+  GlueJobRoleArn:
+    Description: ARN of the Glue job IAM role
+    Value: !GetAtt GlueJobRole.Arn
+    Export:
+      Name: !Sub '${ProjectName}-glue-role-arn'
